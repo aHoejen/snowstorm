@@ -3,6 +3,8 @@ package org.snomed.snowstorm.rest.converter;
 import org.snomed.snowstorm.core.data.domain.ConceptMini;
 import org.snomed.snowstorm.core.data.domain.Concepts;
 import org.snomed.snowstorm.core.data.domain.classification.RelationshipChange;
+import org.snomed.snowstorm.core.pojo.TermLangPojo;
+import org.snomed.snowstorm.core.util.DescriptionHelper;
 import org.snomed.snowstorm.rest.pojo.ItemsPage;
 import org.springframework.http.HttpInputMessage;
 import org.springframework.http.HttpOutputMessage;
@@ -10,18 +12,20 @@ import org.springframework.http.MediaType;
 import org.springframework.http.converter.AbstractGenericHttpMessageConverter;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.http.converter.HttpMessageNotWritableException;
+import org.springframework.util.CollectionUtils;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.lang.reflect.Type;
-import java.util.Collection;
-import java.util.HashSet;
+import java.util.*;
 
 public class ItemsPageCSVConverter extends AbstractGenericHttpMessageConverter<ItemsPage<?>> {
 
 	private static final String TAB = "\t";
+
+	private static final String PREFERRED_TERM_PREFIX = "pt_";
 
 	public ItemsPageCSVConverter() {
 		super(new MediaType("text", "csv"));
@@ -40,8 +44,21 @@ public class ItemsPageCSVConverter extends AbstractGenericHttpMessageConverter<I
 				Object item = items.iterator().next();
 				if (ConceptMini.class.isAssignableFrom(item.getClass())) {
 					writer.write("id\tfsn\teffectiveTime\tactive\tmoduleId\tdefinitionStatus");
-					writer.newLine();
+					int count = 0;
+					List <String> ptColumns = new ArrayList<>();
 					for (ConceptMini concept : (Collection<ConceptMini>) items) {
+						Map<String, String> extraFields = this.getConceptExtraFields(concept);
+						// Add new additional columns for preferred terms
+						if (count == 0) {
+							if (extraFields != null) {
+								for (String key : extraFields.keySet()) {
+									writer.write(TAB);
+									writer.write(key);
+									ptColumns.add(key);
+								}
+							}
+							writer.newLine();
+						}
 						writer.write(concept.getConceptId());
 						writer.write(TAB);
 						writer.write(concept.getFsnTerm());
@@ -53,7 +70,14 @@ public class ItemsPageCSVConverter extends AbstractGenericHttpMessageConverter<I
 						writer.write(concept.getModuleId());
 						writer.write(TAB);
 						writer.write(concept.getDefinitionStatus());
+						if (!CollectionUtils.isEmpty(ptColumns)) {
+							for (int i = 0; i <  ptColumns.size(); i++) {
+								writer.write(TAB);
+								writer.write(extraFields.get(ptColumns.get(i)));
+							}
+						}
 						writer.newLine();
+						count++;
 					}
 				} else if (RelationshipChange.class.isAssignableFrom(item.getClass())) {
 					writer.write("changeNature\tsourceId\tsourceFsn\ttypeId\ttypeFsn\tdestinationId\tdestinationFsn\tdestinationNegated\tcharacteristicTypeId\tgroup\tid\tunionGroup\tmodifier");
@@ -122,6 +146,20 @@ public class ItemsPageCSVConverter extends AbstractGenericHttpMessageConverter<I
 	@Override
 	protected ItemsPage<ConceptMini> readInternal(Class<? extends ItemsPage<?>> clazz, HttpInputMessage inputMessage) throws HttpMessageNotReadableException {
 		return new ItemsPage<>(new HashSet<>());
+	}
+
+	private Map<String, String> getConceptExtraFields(ConceptMini concept) {
+		Map<String, String> extraFields = new HashMap <>();
+		if (!CollectionUtils.isEmpty(concept.getRequestedLanguageDialects())) {
+			concept.getRequestedLanguageDialects().forEach(languageDialect -> {
+				if (languageDialect.getLanguageReferenceSet() != null) {
+					TermLangPojo termLangPojo = DescriptionHelper.getPtDescriptionTermAndLang(concept.getActiveDescriptions(), Arrays.asList(languageDialect));
+					extraFields.put(PREFERRED_TERM_PREFIX + languageDialect.getLanguageReferenceSet().toString(), termLangPojo.getTerm());
+				}
+			});
+		}
+
+		return extraFields;
 	}
 
 	private static final class NullSafeBufferedWriter extends BufferedWriter {
